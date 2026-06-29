@@ -26,7 +26,86 @@ int_t sys_prctl(dword_t option, uint_t arg2, uint_t UNUSED(arg3), uint_t UNUSED(
 
 int_t sys_arch_prctl(int_t code, addr_t addr) {
     STRACE("arch_prctl(%#x, %#x)", code, addr);
+    
+    // x86-64 arch_prctl codes (from Linux arch/x86/include/uapi/asm/prctl.h)
+    // These are only valid when cpu->mode == 1 (x86-64 mode)
+    switch (code) {
+        case 0x1001:  // ARCH_SET_GS
+            if (current->cpu.mode == 1) {
+                current->cpu.gs_base = addr;
+                return 0;
+            }
+            break;
+        case 0x1002:  // ARCH_SET_FS
+            if (current->cpu.mode == 1) {
+                STRACE("  setting fs_base to %#lx", (unsigned long)addr);
+                current->cpu.fs_base = addr;
+                return 0;
+            }
+            break;
+        case 0x1003:  // ARCH_GET_FS
+            if (current->cpu.mode == 1) {
+                // Write 64-bit fs_base to guest address
+                qword_t val = current->cpu.fs_base;
+                if (user_write(addr, &val, sizeof(val)))
+                    return _EFAULT;
+                return 0;
+            }
+            break;
+        case 0x1004:  // ARCH_GET_GS
+            if (current->cpu.mode == 1) {
+                qword_t val = current->cpu.gs_base;
+                if (user_write(addr, &val, sizeof(val)))
+                    return _EFAULT;
+                return 0;
+            }
+            break;
+        case 0x1005:  // ARCH_GET_CPUID
+        case 0x1006:  // ARCH_SET_CPUID
+            return 0;
+        case 0x1011:  // ARCH_GET_XCOMP_SUPP
+        case 0x1012:  // ARCH_GET_XCOMP_PERM
+        case 0x1021:  // ARCH_REQ_XCOMP_PERM
+            return _EINVAL;
+        default:
+            break;
+    }
+    
     return _EINVAL;
+}
+
+// 64-bit version of arch_prctl for x86-64 syscall ABI
+qword_t sys_arch_prctl64(qword_t code, guest64_addr_t addr) {
+    int_t code32 = (int_t)code;
+    
+    switch (code32) {
+        case 0x1001:  // ARCH_SET_GS
+            STRACE("arch_prctl64(ARCH_SET_GS, %#lx)", (unsigned long)addr);
+            current->cpu.gs_base = addr;
+            return 0;
+        case 0x1002:  // ARCH_SET_FS
+            STRACE("arch_prctl64(ARCH_SET_FS, %#lx)", (unsigned long)addr);
+            current->cpu.fs_base = addr;
+            return 0;
+        case 0x1003:  // ARCH_GET_FS
+            STRACE("arch_prctl64(ARCH_GET_FS, %#lx)", (unsigned long)addr);
+            if (user_write64(addr, &current->cpu.fs_base, sizeof(qword_t)))
+                return (qword_t)-_EFAULT;
+            return 0;
+        case 0x1004:  // ARCH_GET_GS
+            STRACE("arch_prctl64(ARCH_GET_GS, %#lx)", (unsigned long)addr);
+            if (user_write64(addr, &current->cpu.gs_base, sizeof(qword_t)))
+                return (qword_t)-_EFAULT;
+            return 0;
+        case 0x3001:  // ARCH_CET_STATUS
+        case 0x3002:  // ARCH_CET_DISABLE
+        case 0x3003:  // ARCH_CET_LOCK
+            // CET (Control-flow Enforcement Technology) - not supported
+            return (qword_t)-_EINVAL;
+        default:
+            STRACE("arch_prctl64(%#x, %#lx) - unknown code", code32, (unsigned long)addr);
+            return (qword_t)-_EINVAL;
+    }
 }
 
 #define REBOOT_MAGIC1 0xfee1dead
