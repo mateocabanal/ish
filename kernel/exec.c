@@ -568,10 +568,293 @@ static inline int user_memset64(guest64_addr_t start, byte_t val, guest64_addr_t
     return 0;
 }
 
+static int elf64_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp) {
+    int err = 0;
+
+    // read the 64-bit headers
+    struct elf64_header header;
+    if ((err = read_header64(fd, &header)) < 0)
+        return err;
+    struct elf64_prg_header *ph;
+    if ((err = read_prg_headers64(fd, header, &ph)) < 0)
+        return err;
+
+    // look for an interpreter (64-bit version)
+    char *interp_name = NULL;
+    struct fd *interp_fd = NULL;
+    struct elf64_header interp_header;
+    struct elf64_prg_header *interp_ph = NULL;
+    for (unsigned i = 0; i < header.phent_count; i++) {
+        if (ph[i].type != PT_INTERP)
+            continue;
+        if (interp_name) {
+            err = _EINVAL;
+            goto out_free_interp64;
+        }
+
+        interp_name = malloc(ph[i].filesize);
+        err = _ENOMEM;
+        if (interp_name == NULL)
+            goto out_free_ph64;
+
+        err = _EIO;
+        if (fd->ops->lseek(fd, ph[i].offset, SEEK_SET) < 0)
+            goto out_free_interp64;
+        if (fd->ops->read(fd, interp_name, ph[i].filesize) != ph[i].filesize)
+            goto out_free_interp64;
+
+        interp_fd = generic_open(interp_name, O_RDONLY, 0);
+        if (IS_ERR(interp_fd)) {
+            err = PTR_ERR(interp_fd);
+            goto out_free_interp64;
+        }
+        if ((err = read_header64(interp_fd, &interp_header)) < 0) {
+            if (err == _ENOEXEC) err = _ELIBBAD;
+            goto out_free_interp64;
+        }
+        if ((err = read_prg_headers64(interp_fd, interp_header, &interp_ph)) < 0) {
+            if (err == _ENOEXEC) err = _ELIBBAD;
+            goto out_free_interp64;
+        }
+    }
+
+    // free the process's memory and create new mm with x86_64 ABI
+    lock(&current->general_lock);
+    mm_release(current->mm);
+    task_set_mm(current, mm_new());
+    current->mm->abi = GUEST_ABI_X86_64;  // Mark as 64-bit process
+    unlock(&current->general_lock);
+    write_wrlock(&current->mem->lock);
+
+    current->mm->exefile = fd_retain(fd);
+
+    guest64_addr_t load_addr = 0;
+    bool load_addr_set = false;
+    guest64_addr_t bias = 0;
+
+    // map 64-bit segments
+    for (unsigned i = 0; i < header.phent_count; i++) {
+        if (ph[i].type != PT_LOAD)
+            continue;
+
+        if (!load_addr_set && header.type == ELF_DYNAMIC) {
+            // For 64-bit, use a different bias
+            if (interp_name)
+                bias = 0x555555554000ULL;
+            else
+                bias = 0x400000ULL;  // Standard x86_64 load address
+        }
+
+        if ((err = load_entry64(ph[i], bias, fd)) < 0)
+            goto beyond_hope64;
+
+        if (!load_addr_set) {
+            load_addr = bias + ph[i].vaddr - ph[i].offset;
+            load_addr_set = true;
+        }
+
+        guest64_addr_t brk = bias + ph[i].vaddr + ph[i].memsize;
+        if (brk > current->mm->start_brk)
+            current->mm->start_brk = current->mm->brk = BYTES_ROUND_UP(brk);
+    }
+
+    guest64_addr_t entry = bias + header.entry_point;
+    guest64_addr_t interp_base = 0;
+
+    if (interp_name) {
+        interp_base = 0x7ffff7dd7000ULL;  // Typical ld-linux-x86-64 base
+        for (int i = interp_header.phent_count - 1; i >= 0; i--) {
+            if (interp_ph[i].type != PT_LOAD)
+                continue;
+            if ((err = load_entry64(interp_ph[i], interp_base, interp_fd)) < 0)
+                goto beyond_hope64;
+        }
+        entry = interp_base + interp_header.entry_point;
+    }
+
+    // TODO: map 64-bit vdso (not implemented yet)
+    // TODO: map 64-bit vvar (not implemented yet)
+
+    // STACK TIME for 64-bit!
+    // x86_64 stack is typically at high addresses
+    guest64_addr_t stack_top = 0x7fffffffe000ULL;
+    
+    // TODO: Actually allocate stack pages at high addresses
+    // For now, this is a stub - full implementation needs 64-bit memory mapping
+    write_wrunlock(&current->mem->lock);
+    
+    guest64_addr_t sp = stack_top;
+    sp -= 8;  // 8 empty bytes at bottom of 64-bit stack
+
+    err = _EFAULT;
+    // Copy strings (filename, argv, envp)
+    guest64_addr_t file_addr = sp;
+    size_t file_len = strlen(file) + 1;
+    sp -= file_len;
+    if (user_write64(sp, file, file_len))
+        goto beyond_hope64;
+    file_addr = sp;
+
+    // Copy envp
+    guest64_addr_t envp_addr = sp;
+    size_t envp_size = args_size(envp);
+    sp -= envp_size;
+    if (user_write64(sp, envp.args, envp_size))
+        goto beyond_hope64;
+    envp_addr = sp;
+    current->mm->argv_end = sp;
+
+    // Copy argv
+    guest64_addr_t argv_addr = sp;
+    size_t argv_size = args_size(argv);
+    sp -= argv_size;
+    if (user_write64(sp, argv.args, argv_size))
+        goto beyond_hope64;
+    argv_addr = sp;
+    current->mm->argv_start = sp;
+    
+    sp &= ~0xfULL;  // 16-byte align
+
+    // Platform string
+    guest64_addr_t platform_addr = sp;
+    const char *platform = "x86_64";
+    sp -= strlen(platform) + 1;
+    if (user_write64(sp, platform, strlen(platform) + 1))
+        goto beyond_hope64;
+    platform_addr = sp;
+
+    // Random bytes
+    char random[16] = {};
+    get_random(random, sizeof(random));
+    guest64_addr_t random_addr = sp - 16;
+    sp -= 16;
+    if (user_write64(sp, random, 16))
+        goto beyond_hope64;
+    random_addr = sp;
+
+    // Build 64-bit aux vector
+    struct elf64_aux_ent aux[] = {
+        // TODO: Add proper 64-bit aux entries when vdso is implemented
+        {AX_PAGESZ, PAGE_SIZE},
+        {AX_CLKTCK, 0x64},
+        {AX_PHDR, load_addr + header.prghead_off},
+        {AX_PHENT, sizeof(struct elf64_prg_header)},
+        {AX_PHNUM, header.phent_count},
+        {AX_BASE, interp_base},
+        {AX_FLAGS, 0},
+        {AX_ENTRY, bias + header.entry_point},
+        {AX_UID, 0},
+        {AX_EUID, 0},
+        {AX_GID, 0},
+        {AX_EGID, 0},
+        {AX_SECURE, 0},
+        {AX_RANDOM, random_addr},
+        {AX_HWCAP, 0},
+        {AX_HWCAP2, 0},
+        {AX_EXECFN, file_addr},
+        {AX_PLATFORM, platform_addr},
+        {0, 0}
+    };
+
+    // Calculate space needed for argc + argv pointers + envp pointers + aux
+    sp -= ((argv.count + 1) + (envp.count + 1) + 1) * sizeof(guest64_addr_t);
+    sp -= sizeof(aux);
+    sp &= ~0xfULL;
+
+    guest64_addr_t p = sp;
+
+    // argc
+    if (user_put64(p, (uint8_t)argv.count))
+        return _EFAULT;
+    p += sizeof(dword_t);  // argc is still 32-bit on Linux
+
+    // argv pointers (64-bit)
+    size_t argc = argv.count;
+    while (argc-- > 0) {
+        if (user_write64(p, &argv_addr, sizeof(guest64_addr_t)))
+            return _EFAULT;
+        argv_addr += user_strlen(argv_addr) + 1;
+        p += sizeof(guest64_addr_t);
+    }
+    guest64_addr_t null_ptr = 0;
+    if (user_write64(p, &null_ptr, sizeof(guest64_addr_t)))
+        return _EFAULT;
+    p += sizeof(guest64_addr_t);
+
+    // envp pointers (64-bit)
+    size_t envc = envp.count;
+    while (envc-- > 0) {
+        if (user_write64(p, &envp_addr, sizeof(guest64_addr_t)))
+            return _EFAULT;
+        envp_addr += user_strlen(envp_addr) + 1;
+        p += sizeof(guest64_addr_t);
+    }
+    if (user_write64(p, &null_ptr, sizeof(guest64_addr_t)))
+        return _EFAULT;
+    p += sizeof(guest64_addr_t);
+
+    // copy aux vector
+    current->mm->auxv_start = p;
+    if (user_write64(p, aux, sizeof(aux)))
+        goto beyond_hope64;
+    p += sizeof(aux);
+    current->mm->auxv_end = p;
+
+    current->mm->stack_start = sp;
+    
+    // Set up x86_64 CPU state
+    current->cpu.mode = 1;  // 64-bit mode
+    current->cpu.rsp = sp;
+    current->cpu.rip = entry;
+    current->cpu.fcw = 0x37f;
+
+    // Clear all 64-bit registers
+    current->cpu.rax = 0;
+    current->cpu.rbx = 0;
+    current->cpu.rcx = 0;
+    current->cpu.rdx = 0;
+    current->cpu.rsi = 0;
+    current->cpu.rdi = 0;
+    current->cpu.rbp = 0;
+    current->cpu.r8 = 0;
+    current->cpu.r9 = 0;
+    current->cpu.r10 = 0;
+    current->cpu.r11 = 0;
+    current->cpu.r12 = 0;
+    current->cpu.r13 = 0;
+    current->cpu.r14 = 0;
+    current->cpu.r15 = 0;
+    collapse_flags(&current->cpu);
+    current->cpu.eflags = 0;
+
+    err = 0;
+out_free_interp64:
+    if (interp_name != NULL)
+        free(interp_name);
+    if (interp_fd != NULL && !IS_ERR(interp_fd))
+        fd_close(interp_fd);
+    if (interp_ph != NULL)
+        free(interp_ph);
+out_free_ph64:
+    free(ph);
+    return err;
+
+beyond_hope64:
+    write_wrunlock(&current->mem->lock);
+    goto out_free_interp64;
+}
+
 static int format_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp) {
-    int err = elf_exec(fd, file, argv, envp);
+    // Try 64-bit ELF first (more specific)
+    int err = elf64_exec(fd, file, argv, envp);
     if (err != _ENOEXEC)
         return err;
+    
+    // Fall back to 32-bit ELF
+    err = elf_exec(fd, file, argv, envp);
+    if (err != _ENOEXEC)
+        return err;
+    
     // other formats would go here
     return _ENOEXEC;
 }
