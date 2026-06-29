@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "kernel/calls.h"
@@ -6,6 +7,9 @@
 #include "xX_main_Xx.h"
 
 int main(int argc, char *const argv[]) {
+    // do_execve expects envp as Linux-style NUL-separated strings ending in an
+    // extra NUL. For the command-line runner we only preserve TERM, which is
+    // enough for shells and terminal programs started by the test binary.
     char envp[100] = {0};
     if (getenv("TERM"))
         strcpy(envp, getenv("TERM") - strlen("TERM") - 1);

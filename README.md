@@ -19,6 +19,7 @@ For the current status of the project, check the issues tab, and the commit logs
 - [TestFlight beta](https://testflight.apple.com/join/97i7KM8O)
 - [Discord server](https://discord.gg/HFAXj44)
 - [Wiki with help and tutorials](https://github.com/ish-app/ish/wiki)
+- [Architecture overview for contributors](docs/architecture.md)
 - [README中文](https://github.com/ish-app/ish/blob/master/README_ZH.md) (如若未能保持最新，请提交PR以更新)
 
 # Hacking

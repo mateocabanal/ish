@@ -22,6 +22,9 @@ dword_t syscall_success_stub(void) {
 #if is_gcc(8) || is_clang(21)
 #pragma GCC diagnostic ignored "-Wcast-function-type"
 #endif
+// iSH emulates the 32-bit i386 Linux syscall ABI. eax selects the syscall and
+// ebx/ecx/edx/esi/edi/ebp carry up to six arguments. The table indexes are the
+// Linux syscall numbers, so sparse entries intentionally mirror the kernel ABI.
 syscall_t syscall_table[] = {
     [1]   = (syscall_t) sys_exit,
     [2]   = (syscall_t) sys_fork,
@@ -268,6 +271,9 @@ void handle_interrupt(int interrupt) {
                 printk("%d(%s) stub syscall %d\n", current->pid, current->comm, syscall_num);
             }
             STRACE("%d call %-3d ", current->pid, syscall_num);
+            // All handlers are cast to the widest syscall signature above; the
+            // unused trailing register arguments are harmless for shorter C
+            // functions on the supported ABIs.
             int result = syscall_table[syscall_num](cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
             STRACE(" = 0x%x\n", result);
             cpu->eax = result;

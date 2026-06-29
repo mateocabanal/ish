@@ -99,6 +99,10 @@ void task_run_current(void) {
     struct cpu_state *cpu = &current->cpu;
     struct tlb tlb = {};
     tlb_refresh(&tlb, &current->mem->mmu);
+    // Run guest code until the emulator reports an interrupt, then let the
+    // kernel layer translate that interrupt into a syscall, signal, page-fault
+    // fixup, timer tick, or other guest-visible event. The memory read lock is
+    // held only while the emulator is actively walking guest memory.
     while (true) {
         read_wrlock(&current->mem->lock);
         int interrupt = cpu_run_to_interrupt(cpu, &tlb);

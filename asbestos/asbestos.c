@@ -116,6 +116,10 @@ static struct fiber_block *fiber_block_compile(addr_t ip, struct tlb *tlb) {
     struct gen_state state;
     TRACE("%d %08x --- compiling:\n", current_pid(), ip);
     gen_start(ip, &state);
+    // gen_step appends gadget pointers and operands for one x86 instruction at
+    // a time. Blocks stop at control flow, faults/undefined instructions, or
+    // before the decoded block can span more than two guest pages; that keeps
+    // page-based invalidation precise.
     while (true) {
         if (!gen_step(&state, tlb))
             break;
@@ -207,6 +211,9 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                 (last_block->jump_ip[0] != NULL ||
                  last_block->jump_ip[1] != NULL)) {
             lock(&asbestos->lock);
+            // Branch gadgets are emitted with guest IP targets first. Once the
+            // target block exists, patch those slots to the target block's
+            // gadget array so future dispatch can jump block-to-block directly.
             // can't mint new pointers to a block that has been marked jetsam
             // and is thus assumed to have no pointers left
             if (!last_block->is_jetsam && !block->is_jetsam) {

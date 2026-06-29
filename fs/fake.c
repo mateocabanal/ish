@@ -16,7 +16,11 @@
 #define ISH_INTERNAL
 #include "fs/fake.h"
 
-// TODO document database
+// fakefs stores file contents in the host directory via realfs, but keeps the
+// Linux-visible metadata that host filesystems may not preserve (mode, uid,
+// gid, rdev, stable fake inode numbers, symlink/device semantics) in SQLite.
+// Most operations update realfs and the metadata database in the same fakefs
+// transaction window.
 
 // this exists only to override readdir to fix the returned inode numbers
 static struct fd_ops fakefs_fdops;

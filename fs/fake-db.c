@@ -132,6 +132,10 @@ inode_t path_unlink(struct fakefs_db *fs, const char *path) {
     return inode;
 }
 void path_rename(struct fakefs_db *fs, const char *src, const char *dst) {
+    // Rename the exact path and every descendant in one SQLite statement. Paths
+    // are bound as blobs rather than text; using the byte range ["src/", "src0")
+    // selects descendants of src without matching similarly-prefixed siblings.
+    // The SQL then replaces the src prefix with dst via the change_prefix UDF.
     // update or replace paths set path = change_prefix(path, ? [len(src)], ? [dst])
     //  where (path >= ? [src plus /] and path < [src plus 0]) or path = ? [src]
     // arguments:

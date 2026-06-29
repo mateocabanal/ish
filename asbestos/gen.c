@@ -129,6 +129,9 @@ enum repeat {
 
 typedef void (*gadget_t)(void);
 
+// The short g/gg/ggg helpers append a gadget function pointer followed by any
+// inline operands that gadget expects. The generated fiber_block is therefore a
+// compact threaded-code program rather than native machine code.
 #define GEN(thing) gen(state, (unsigned long) (thing))
 #define g(g) do { extern void gadget_##g(void); GEN(gadget_##g); } while (0)
 #define gg(_g, a) do { g(_g); GEN(a); } while (0)
@@ -252,6 +255,9 @@ static inline bool gen_op(struct gen_state *state, gadget_t *gadgets, enum arg a
 
 #define fake_ip (state->ip | (1ul << 63))
 
+// Branch and call gadgets initially receive encoded guest IPs. asbestos.c may
+// later replace the recorded jump_ip slots with direct fiber_block->code
+// pointers when the destination block has been compiled.
 #define jump_ips(off1, off2) \
     state->jump_ip[0] = state->size + off1; \
     if (off2 != 0) \
