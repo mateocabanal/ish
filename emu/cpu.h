@@ -35,22 +35,34 @@ static_assert(sizeof(union mm_reg) == 8, "mm_reg size");
 struct cpu_state {
     struct mmu *mmu;
     long cycle;
+    
+    // ABI mode: 0 = i386, 1 = x86_64
+    uint8_t mode;
 
     // general registers
     // assumes little endian (as does literally everything)
 #define _REG(n) \
     union { \
+        qword_t r##n; \
         dword_t e##n; \
         word_t n; \
     }
 #define _REGX(n) \
     union { \
+        qword_t r##n##x; \
         dword_t e##n##x; \
         word_t n##x; \
         struct { \
             byte_t n##l; \
             byte_t n##h; \
         }; \
+    }
+#define _REGR(n) \
+    union { \
+        qword_t r##n; \
+        dword_t r##n##d; \
+        word_t r##n##w; \
+        byte_t r##n##b; \
     }
 
     union {
@@ -63,13 +75,25 @@ struct cpu_state {
             _REG(bp);
             _REG(si);
             _REG(di);
+            _REGR(8);
+            _REGR(9);
+            _REGR(10);
+            _REGR(11);
+            _REGR(12);
+            _REGR(13);
+            _REGR(14);
+            _REGR(15);
         };
-        dword_t regs[8];
+        qword_t regs[16];
     };
 #undef REGX
 #undef REG
+#undef REGR
 
-    dword_t eip;
+    qword_t rip;
+    union {
+        dword_t eip;  // For i386 compatibility
+    };
 
     // flags
     union {
