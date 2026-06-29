@@ -16,8 +16,24 @@ struct mem {
     struct mmu mmu;
 
     wrlock_t lock;
+
+    /* Sparse page map for 64-bit guest addresses (x86-64 support).
+     * Pages whose address doesn't fit in 32 bits are stored here
+     * instead of in the fixed pgdir[]. Key is the full 64-bit page number. */
+    struct sparse_page *sparse_pages;
+    int sparse_pages_count;
+    int sparse_pages_buckets;  /* number of hash buckets, 0 = not yet initialized */
 };
+
+/* Hash bucket for sparse page map */
+struct sparse_page {
+    uint64_t page;                    /* full 64-bit page number (key) */
+    struct pt_entry entry;            /* page table entry */
+    struct sparse_page *next;         /* next in bucket chain */
+};
+
 #define MEM_PGDIR_SIZE (1 << 10)
+#define SPARSE_PAGE_BUCKETS_INIT 64   /* initial number of hash buckets */
 
 // Initialize the address space
 void mem_init(struct mem *mem);
@@ -25,6 +41,10 @@ void mem_init(struct mem *mem);
 void mem_destroy(struct mem *mem);
 // Return the pagetable entry for the given page
 struct pt_entry *mem_pt(struct mem *mem, page_t page);
+// Return the pagetable entry for a 64-bit page number (x86-64 support)
+struct pt_entry *mem_pt64(struct mem *mem, uint64_t page);
+// Create or get a page table entry for a 64-bit page number
+struct pt_entry *mem_pt64_new(struct mem *mem, uint64_t page);
 // Increment *page, skipping over unallocated page directories. Intended to be
 // used as the incremenent in a for loop to traverse mappings.
 void mem_next_page(struct mem *mem, page_t *page);
@@ -76,10 +96,9 @@ struct pt_entry {
 bool pt_is_hole(struct mem *mem, page_t start, pages_t pages);
 page_t pt_find_hole(struct mem *mem, pages_t size);
 
-// Map memory + offset into fake memory, unmapping existing mappings. Takes
-// ownership of memory. It will be freed with:
-// munmap(memory, pages * PAGE_SIZE)
 int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t offset, unsigned flags);
+// Map 64-bit guest address range (x86-64 support)
+int pt_map64(struct mem *mem, uint64_t start, pages_t pages, void *memory, size_t offset, unsigned flags);
 // Map empty space into fake memory
 int pt_map_nothing(struct mem *mem, page_t page, pages_t pages, unsigned flags);
 // Unmap fake memory, return -1 if any part of the range isn't mapped and 0 otherwise

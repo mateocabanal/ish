@@ -27,6 +27,10 @@ void mem_init(struct mem *mem) {
     mem->mmu.asbestos = asbestos_new(&mem->mmu);
     mem->mmu.changes = 0;
     wrlock_init(&mem->lock);
+    // Sparse page map starts uninitialized (lazy init on first 64-bit page)
+    mem->sparse_pages = NULL;
+    mem->sparse_pages_count = 0;
+    mem->sparse_pages_buckets = 0;
 }
 
 void mem_destroy(struct mem *mem) {
@@ -38,6 +42,7 @@ void mem_destroy(struct mem *mem) {
             free(mem->pgdir[i]);
     }
     free(mem->pgdir);
+    sparse_pages_free(mem);
     write_wrunlock(&mem->lock);
     wrlock_destroy(&mem->lock);
 }
@@ -68,6 +73,109 @@ static void mem_pt_del(struct mem *mem, page_t page) {
     struct pt_entry *entry = mem_pt(mem, page);
     if (entry != NULL)
         entry->data = NULL;
+}
+
+// ---- Sparse page map for 64-bit addresses ----
+
+static uint64_t sparse_page_hash(struct mem *mem, uint64_t page) {
+    // Simple hash: mix the bits and mod by bucket count
+    uint64_t h = page ^ (page >> 16);
+    h ^= h >> 8;
+    return h % mem->sparse_pages_buckets;
+}
+
+static struct pt_entry *sparse_page_get(struct mem *mem, uint64_t page) {
+    if (mem->sparse_pages_buckets == 0)
+        return NULL;
+    uint64_t bucket = sparse_page_hash(mem, page);
+    struct sparse_page *sp = mem->sparse_pages[bucket].next;
+    while (sp != NULL) {
+        if (sp->page == page)
+            return &sp->entry;
+        sp = sp->next;
+    }
+    return NULL;
+}
+
+static struct pt_entry *sparse_page_new(struct mem *mem, uint64_t page) {
+    // Initialize hash table on first use
+    if (mem->sparse_pages_buckets == 0) {
+        mem->sparse_pages_buckets = SPARSE_PAGE_BUCKETS_INIT;
+        mem->sparse_pages = calloc(mem->sparse_pages_buckets, sizeof(struct sparse_page));
+        mem->sparse_pages_count = 0;
+    }
+
+    uint64_t bucket = sparse_page_hash(mem, page);
+    struct sparse_page *sp = mem->sparse_pages[bucket].next;
+    while (sp != NULL) {
+        if (sp->page == page)
+            return &sp->entry;  // already exists
+        sp = sp->next;
+    }
+
+    // Allocate new entry and insert at head of bucket chain
+    sp = malloc(sizeof(struct sparse_page));
+    if (sp == NULL)
+        return NULL;
+    sp->page = page;
+    memset(&sp->entry, 0, sizeof(sp->entry));
+    sp->next = mem->sparse_pages[bucket].next;
+    mem->sparse_pages[bucket].next = sp;
+    mem->sparse_pages_count++;
+    return &sp->entry;
+}
+
+static void sparse_page_del(struct mem *mem, uint64_t page) {
+    if (mem->sparse_pages_buckets == 0)
+        return;
+    uint64_t bucket = sparse_page_hash(mem, page);
+    struct sparse_page **pp = &mem->sparse_pages[bucket].next;
+    while (*pp != NULL) {
+        struct sparse_page *sp = *pp;
+        if (sp->page == page) {
+            *pp = sp->next;
+            free(sp);
+            mem->sparse_pages_count--;
+            return;
+        }
+        pp = &sp->next;
+    }
+}
+
+// Free all sparse pages (called from mem_destroy)
+static void sparse_pages_free(struct mem *mem) {
+    if (mem->sparse_pages_buckets == 0)
+        return;
+    for (int i = 0; i < mem->sparse_pages_buckets; i++) {
+        struct sparse_page *sp = mem->sparse_pages[i].next;
+        while (sp != NULL) {
+            struct sparse_page *next = sp->next;
+            free(sp);
+            sp = next;
+        }
+    }
+    free(mem->sparse_pages);
+    mem->sparse_pages = NULL;
+    mem->sparse_pages_buckets = 0;
+    mem->sparse_pages_count = 0;
+}
+
+// Look up a page table entry for a 64-bit guest page number.
+// Checks the fast pgdir for low pages, falls back to sparse map for high pages.
+struct pt_entry *mem_pt64(struct mem *mem, uint64_t page) {
+    if (page <= 0xFFFFF) {
+        // Fast path: fits in 32-bit page table
+        return mem_pt(mem, (page_t)page);
+    }
+    return sparse_page_get(mem, page);
+}
+
+// Create or get a page table entry for a 64-bit guest page number.
+struct pt_entry *mem_pt64_new(struct mem *mem, uint64_t page) {
+    if (page <= 0xFFFFF) {
+        return mem_pt_new(mem, (page_t)page);
+    }
+    return sparse_page_new(mem, page);
 }
 
 void mem_next_page(struct mem *mem, page_t *page) {
@@ -130,6 +238,38 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         struct pt_entry *pt = mem_pt_new(mem, page);
         pt->data = data;
         pt->offset = ((page - start) << PAGE_BITS) + offset;
+        pt->flags = flags;
+    }
+    return 0;
+}
+
+// Map 64-bit guest address range into memory.
+// Used for x86-64 support where addresses may exceed 32-bit range.
+int pt_map64(struct mem *mem, uint64_t start, pages_t pages, void *memory, size_t offset, unsigned flags) {
+    if (memory == MAP_FAILED)
+        return errno_map();
+
+    struct data *data = malloc(sizeof(struct data));
+    if (data == NULL)
+        return _ENOMEM;
+    *data = (struct data) {
+        .data = memory,
+        .size = pages * PAGE_SIZE + offset,
+#if LEAK_DEBUG
+        .pid = current ? current->pid : 0,
+        .dest = start << PAGE_BITS,
+#endif
+    };
+
+    for (uint64_t page = start; page < start + pages; page++) {
+        data->refcount++;
+        struct pt_entry *pt = mem_pt64_new(mem, page);
+        if (pt == NULL) {
+            free(data);
+            return _ENOMEM;
+        }
+        pt->data = data;
+        pt->offset = (size_t)((page - start) << PAGE_BITS) + offset;
         pt->flags = flags;
     }
     return 0;
