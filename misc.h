@@ -110,8 +110,28 @@ typedef int32_t sdword_t;
 typedef uint16_t word_t;
 typedef uint8_t byte_t;
 
-typedef dword_t addr_t;
-typedef dword_t uint_t;
+/*
+ * Guest ABI types - explicit widths for guest pointers and values.
+ * These are ABI-specific and should be used in structs that cross the
+ * guest/host boundary (ELF headers, syscall arguments, signal frames).
+ */
+typedef dword_t guest32_addr_t;
+typedef qword_t guest64_addr_t;
+typedef dword_t guest32_ulong_t;
+typedef qword_t guest64_ulong_t;
+
+/*
+ * Generic guest address type - will be set based on current->mm->abi.
+ * For now, defaults to 32-bit until full ABI split is complete.
+ */
+typedef qword_t guest_addr_t;
+
+/*
+ * Temporary compatibility aliases - will be removed after full ABI split.
+ * These preserve current behavior while we gradually migrate call sites.
+ */
+typedef guest32_addr_t addr_t;
+typedef guest32_ulong_t uint_t;
 typedef sdword_t int_t;
 
 typedef sdword_t pid_t_;
