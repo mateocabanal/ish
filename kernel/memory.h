@@ -49,40 +49,8 @@ struct data {
 #endif
 };
 
-// 64-bit memory access stubs for x86-64 support
-// These are minimal implementations that will be expanded when full 64-bit memory support is added
-static inline int user_get64(guest64_addr_t addr, void *out) {
-    // TODO: Implement full 64-bit memory access
-    // For now, only support addresses that fit in 32-bit range
-    if (addr > 0xFFFFFFFF) {
-        return -1; // Invalid address for now
-    }
-    return user_get((addr_t)addr, *(uint8_t*)out);
-}
+<longcat_arg_value>
 
-static inline int user_put64(guest64_addr_t addr, uint8_t val) {
-    // TODO: Implement full 64-bit memory access
-    if (addr > 0xFFFFFFFF) {
-        return -1;
-    }
-    return user_put((addr_t)addr, val);
-}
-
-static inline int user_write64(guest64_addr_t addr, const void *data, size_t len) {
-    // TODO: Implement full 64-bit memory access
-    if (addr > 0xFFFFFFFF || addr + len > 0xFFFFFFFF) {
-        return -1;
-    }
-    return user_write((addr_t)addr, data, len);
-}
-
-static inline int user_read64(guest64_addr_t addr, void *out, size_t len) {
-    // TODO: Implement full 64-bit memory access
-    if (addr > 0xFFFFFFFF || addr + len > 0xFFFFFFFF) {
-        return -1;
-    }
-    return user_read((addr_t)addr, out, len);
-}
 struct pt_entry {
     struct data *data;
     size_t offset;

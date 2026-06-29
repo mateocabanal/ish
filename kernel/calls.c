@@ -258,19 +258,51 @@ void dump_stack(int lines);
 
 void handle_interrupt(int interrupt) {
     struct cpu_state *cpu = &current->cpu;
+    
     if (interrupt == INT_SYSCALL) {
-        unsigned syscall_num = cpu->eax;
-        if (syscall_num >= NUM_SYSCALLS || syscall_table[syscall_num] == NULL) {
-            printk("%d(%s) missing syscall %d\n", current->pid, current->comm, syscall_num);
-            cpu->eax = _ENOSYS;
-        } else {
-            if (syscall_table[syscall_num] == (syscall_t) syscall_stub) {
-                printk("%d(%s) stub syscall %d\n", current->pid, current->comm, syscall_num);
+        // Check if we're in 64-bit mode
+        if (cpu->mode == 1) {
+            // x86-64 syscall handling
+            // rax = syscall number, rdi/rsi/rdx/r10/r8/r9 = arguments
+            // Return value in rax
+            extern qword_t syscall64_table[];
+            extern size_t NUM_SYSCALLS64;
+            
+            qword_t syscall_num = cpu->rax;
+            if (syscall_num >= NUM_SYSCALLS64 || syscall64_table[syscall_num] == NULL) {
+                printk("%d(%s) missing syscall64 %llu\n", current->pid, current->comm, (unsigned long long)syscall_num);
+                cpu->rax = (qword_t)-_ENOSYS;
+            } else {
+                typedef qword_t (*syscall64_t)(qword_t, qword_t, qword_t, qword_t, qword_t, qword_t);
+                syscall64_t handler = (syscall64_t)syscall64_table[syscall_num];
+                
+                STRACE("%d call64 %-3llu ", current->pid, (unsigned long long)syscall_num);
+                qword_t result = handler(
+                    cpu->rdi,
+                    cpu->rsi,
+                    cpu->rdx,
+                    cpu->r10,  // Note: r10, not rcx for arg4
+                    cpu->r8,
+                    cpu->r9
+                );
+                STRACE(" = 0x%llx\n", (unsigned long long)result);
+                cpu->rax = result;
             }
-            STRACE("%d call %-3d ", current->pid, syscall_num);
-            int result = syscall_table[syscall_num](cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
-            STRACE(" = 0x%x\n", result);
-            cpu->eax = result;
+        } else {
+            // i386 syscall handling (existing code)
+            unsigned syscall_num = cpu->eax;
+            if (syscall_num >= NUM_SYSCALLS || syscall_table[syscall_num] == NULL) {
+                printk("%d(%s) missing syscall %d\n", current->pid, current->comm, syscall_num);
+                cpu->eax = _ENOSYS;
+            } else {
+                if (syscall_table[syscall_num] == (syscall_t) syscall_stub) {
+                    printk("%d(%s) stub syscall %d\n", current->pid, current->comm, syscall_num);
+                }
+                STRACE("%d call %-3d ", current->pid, syscall_num);
+                int result = syscall_table[syscall_num](cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
+                STRACE(" = 0x%x\n", result);
+                cpu->eax = result;
+            }
         }
     } else if (interrupt == INT_GPF) {
         // some page faults, such as stack growing or CoW clones, are handled by mem_ptr

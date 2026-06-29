@@ -85,6 +85,7 @@ if get_option('kernel') == 'ish'
         'kernel/errno.c',
 
         'kernel/calls.c',
+        'kernel/calls_x86_64.c',
         'kernel/memory.c',
         'kernel/user.c',
         'kernel/vdso.c', vdso,
