@@ -12,6 +12,7 @@
 #define ELF_EXECUTABLE 2
 #define ELF_DYNAMIC 3
 #define ELF_X86 3
+#define ELF_X86_64 62
 
 struct elf_header {
     uint32_t magic;
@@ -104,6 +105,64 @@ struct elf_sym {
     byte_t info;
     byte_t other;
     uint16_t shndx;
+};
+
+/*
+ * ELF64 structures for x86_64 support.
+ * These mirror the 32-bit structures but with 64-bit fields.
+ */
+
+struct elf64_header {
+    uint32_t magic;
+    byte_t bitness;
+    byte_t endian;
+    byte_t elfversion1;
+    byte_t abi;
+    byte_t abi_version;
+    byte_t padding[7];
+    uint16_t type;
+    uint16_t machine;
+    uint32_t elfversion2;
+    qword_t entry_point;
+    qword_t prghead_off;
+    qword_t secthead_off;
+    uint32_t flags;
+    uint16_t header_size;
+    uint16_t phent_size;
+    uint16_t phent_count;
+    uint16_t shent_size;
+    uint16_t shent_count;
+    uint16_t sectname_index;
+};
+
+struct elf64_prg_header {
+    uint32_t type;
+    uint32_t flags;  // Note: flags moved before offset in ELF64
+    qword_t offset;
+    qword_t vaddr;
+    qword_t paddr;
+    qword_t filesize;
+    qword_t memsize;
+    qword_t alignment;
+};
+
+struct elf64_aux_ent {
+    qword_t type;
+    qword_t value;
+};
+
+struct elf64_dyn_ent {
+    qword_t tag;
+    qword_t val;
+};
+
+struct elf64_sym {
+    uint32_t name;
+    byte_t info;
+    byte_t other;
+    uint16_t shndx;
+    qword_t value;
+    qword_t size;
 };
 
 #endif
