@@ -72,6 +72,27 @@ static int read_header64(struct fd *fd, struct elf64_header *header) {
     return 0;
 }
 
+static int read_prg_headers64(struct fd *fd, struct elf64_header header, struct elf64_prg_header **ph_out) {
+    ssize_t ph_size = sizeof(struct elf64_prg_header) * header.phent_count;
+    struct elf64_prg_header *ph = malloc(ph_size);
+    if (ph == NULL)
+        return _ENOMEM;
+
+    if (fd->ops->lseek(fd, header.prghead_off, SEEK_SET) < 0) {
+        free(ph);
+        return _EIO;
+    }
+    if (fd->ops->read(fd, ph, ph_size) != ph_size) {
+        free(ph);
+        if (errno != 0)
+            return _EIO;
+        return _ENOEXEC;
+    }
+
+    *ph_out = ph;
+    return 0;
+}
+
 static int read_prg_headers(struct fd *fd, struct elf_header header, struct prg_header **ph_out) {
     ssize_t ph_size = sizeof(struct prg_header) * header.phent_count;
     struct prg_header *ph = malloc(ph_size);
@@ -129,6 +150,55 @@ static int load_entry(struct prg_header ph, addr_t bias, struct fd *fd) {
             // called without locking mem.
             write_wrunlock(&current->mem->lock);
             user_memset(file_end, 0, tail_size);
+            write_wrlock(&current->mem->lock);
+        }
+        if (tail_size > bss_size)
+            tail_size = bss_size;
+
+        // then map the pages from after the file mapping up to and including the end of bss
+        if (bss_size - tail_size != 0)
+            if ((err = pt_map_nothing(current->mem, PAGE_ROUND_UP(addr + filesize),
+                    PAGE_ROUND_UP(bss_size - tail_size), flags)) < 0)
+                return err;
+    }
+    return 0;
+}
+
+static int load_entry64(struct elf64_prg_header ph, guest64_addr_t bias, struct fd *fd) {
+    int err;
+
+    guest64_addr_t addr = ph.vaddr + bias;
+    guest64_addr_t offset = ph.offset;
+    guest64_addr_t memsize = ph.memsize;
+    guest64_addr_t filesize = ph.filesize;
+
+    int flags = P_READ;
+    if (ph.flags & PH_W) flags |= P_WRITE;
+
+    if ((err = fd->ops->mmap(fd, current->mem, PAGE(addr),
+                    PAGE_ROUND_UP(filesize + PGOFFSET(addr)),
+                    offset - PGOFFSET(addr), flags, MMAP_PRIVATE)) < 0)
+        return err;
+    
+    mem_pt(current->mem, PAGE(addr))->data->fd = fd_retain(fd);
+    mem_pt(current->mem, PAGE(addr))->data->file_offset = offset - PGOFFSET(addr);
+
+    if (memsize > filesize) {
+        // put zeroes between addr + filesize and addr + memsize, call that bss
+        guest64_addr_t bss_size = memsize - filesize;
+
+        // first zero the tail from the end of the file mapping to the end
+        // of the load entry or the end of the page, whichever comes first
+        guest64_addr_t file_end = addr + filesize;
+        guest64_addr_t tail_size = PAGE_SIZE - PGOFFSET(file_end);
+        if (tail_size == PAGE_SIZE)
+            tail_size = 0;
+
+        if (tail_size != 0) {
+            // Unlock and lock the mem because the user functions must be
+            // called without locking mem.
+            write_wrunlock(&current->mem->lock);
+            user_memset64(file_end, 0, tail_size);
             write_wrlock(&current->mem->lock);
         }
         if (tail_size > bss_size)
@@ -487,6 +557,13 @@ static inline ssize_t user_strlen(addr_t p) {
 static inline int user_memset(addr_t start, byte_t val, dword_t len) {
     while (len--)
         if (user_put(start++, val))
+            return 1;
+    return 0;
+}
+
+static inline int user_memset64(guest64_addr_t start, byte_t val, guest64_addr_t len) {
+    while (len--)
+        if (user_put64(start++, val))
             return 1;
     return 0;
 }
