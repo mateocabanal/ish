@@ -53,6 +53,25 @@ static int read_header(struct fd *fd, struct elf_header *header) {
     return 0;
 }
 
+static int read_header64(struct fd *fd, struct elf64_header *header) {
+    int err;
+    if (fd->ops->lseek(fd, 0, SEEK_SET))
+        return _EIO;
+    if ((err = fd->ops->read(fd, header, sizeof(*header))) != sizeof(*header)) {
+        if (err < 0)
+            return _EIO;
+        return _ENOEXEC;
+    }
+    if (memcmp(&header->magic, ELF_MAGIC, sizeof(header->magic)) != 0
+            || (header->type != ELF_EXECUTABLE && header->type != ELF_DYNAMIC)
+            || header->bitness != ELF_64BIT
+            || header->endian != ELF_LITTLEENDIAN
+            || header->elfversion1 != 1
+            || header->machine != ELF_X86_64)
+        return _ENOEXEC;
+    return 0;
+}
+
 static int read_prg_headers(struct fd *fd, struct elf_header header, struct prg_header **ph_out) {
     ssize_t ph_size = sizeof(struct prg_header) * header.phent_count;
     struct prg_header *ph = malloc(ph_size);
