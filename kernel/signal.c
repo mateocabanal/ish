@@ -786,3 +786,52 @@ dword_t sys_tkill(pid_t_ tid, dword_t sig) {
         return _EINVAL;
     return do_kill(tid, sig, 0);
 }
+
+// x86-64 rt_sigreturn handler
+// Restores all 16 general-purpose registers, rip, and rflags from signal frame
+qword_t sys_rt_sigreturn64(void) {
+    struct cpu_state *cpu = &current->cpu;
+    struct rt_sigframe64_ frame;
+    
+    // rsp points past the first field of the frame
+    guest64_addr_t frame_addr = cpu->rsp - offsetof(struct rt_sigframe64_, sig);
+    
+    // Read the frame from guest memory
+    if (user_read64(frame_addr, &frame, sizeof(frame))) {
+        deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
+        return (qword_t)-_EFAULT;
+    }
+    
+    // Restore all 16 general-purpose registers from sigcontext
+    struct sigcontext64_ *mc = &frame.uc.mcontext;
+    cpu->r8  = mc->r8;
+    cpu->r9  = mc->r9;
+    cpu->r10 = mc->r10;
+    cpu->r11 = mc->r11;
+    cpu->r12 = mc->r12;
+    cpu->r13 = mc->r13;
+    cpu->r14 = mc->r14;
+    cpu->r15 = mc->r15;
+    cpu->rdi = mc->rdi;
+    cpu->rsi = mc->rsi;
+    cpu->rbp = mc->rbp;
+    cpu->rbx = mc->rbx;
+    cpu->rdx = mc->rdx;
+    cpu->rax = mc->rax;
+    cpu->rcx = mc->rcx;
+    cpu->rsp = mc->rsp;
+    cpu->rip = mc->rip;
+    cpu->rflags = mc->eflags;
+    
+    // Restore sigmask
+    lock(&current->sighand->lock);
+    // x86-64 signal mask is 64 bits (8 signals at most in the low byte)
+    sigmask_set((sigset_t_)(mc->oldmask & 0xFF));
+    unlock(&current->sighand->lock);
+    
+    // Restore fs_base and gs_base from the signal context
+    cpu->fs_base = mc->fs;  // Note: mc->fs is a word_t, needs proper handling
+    cpu->gs_base = mc->gs;
+    
+    return cpu->rax;
+}

@@ -151,6 +151,7 @@ dword_t sys_rt_sigaction(dword_t signum, addr_t action_addr, addr_t oldaction_ad
 dword_t sys_sigaction(dword_t signum, addr_t action_addr, addr_t oldaction_addr);
 dword_t sys_rt_sigreturn(void);
 dword_t sys_sigreturn(void);
+qword_t sys_rt_sigreturn64(void);
 
 #define SIG_BLOCK_ 0
 #define SIG_UNBLOCK_ 1
@@ -264,6 +265,62 @@ struct fpstate_ {
     struct fpxreg_ fxsr_st[8];
     struct xmmreg_ xmm[8];
     dword_t padding[56];
+};
+
+// ---- x86-64 signal frame structures ----
+
+struct sigcontext64_ {
+    qword_t r8;
+    qword_t r9;
+    qword_t r10;
+    qword_t r11;
+    qword_t r12;
+    qword_t r13;
+    qword_t r14;
+    qword_t r15;
+    qword_t rdi;
+    qword_t rsi;
+    qword_t rbp;
+    qword_t rbx;
+    qword_t rdx;
+    qword_t rax;
+    qword_t rcx;
+    qword_t rsp;
+    qword_t rip;
+    qword_t eflags;
+    word_t cs;
+    word_t gs;
+    word_t fs;
+    word_t __pad0;
+    qword_t err;
+    qword_t trapno;
+    qword_t oldmask;
+    qword_t cr2;
+    // fpstate pointer and reserved space
+    qword_t fpstate;
+    qword_t __reserved[8];
+};
+
+struct ucontext64_ {
+    uint64_t flags;
+    uint64_t link;
+    struct stack_t_ stack;
+    struct sigcontext64_ mcontext;
+    // x86-64 sigset is 64 bits in kernel, but 8 bytes for compatibility
+    uint64_t sigmask;
+} __attribute__((packed));
+
+struct rt_sigframe64_ {
+    addr_t restorer;
+    int_t sig;
+    addr_t pinfo;
+    addr_t puc;
+    union {
+        struct siginfo_ info;
+        char __pad[128];
+    };
+    struct ucontext64_ uc;
+    char retcode[8];
 };
 
 struct sigframe_ {
