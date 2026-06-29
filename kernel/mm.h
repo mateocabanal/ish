@@ -2,12 +2,14 @@
 #define KERNEL_MM_H
 
 #include "kernel/memory.h"
+#include "kernel/abi.h"
 #include "misc.h"
 
 // uses mem.lock instead of having a lock of its own
 struct mm {
     atomic_uint refcount;
     struct mem mem;
+    enum guest_abi abi; // Guest ABI for this address space (i386 or x86_64)
 
     addr_t vdso; // immutable
     addr_t start_brk; // immutable

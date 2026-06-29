@@ -12,6 +12,7 @@ struct mm *mm_new(void) {
     if (mm == NULL)
         return NULL;
     mem_init(&mm->mem);
+    mm->abi = GUEST_ABI_I386; // Default to i386, exec will update if x86_64
     mm->start_brk = mm->brk = 0; // should get overwritten by exec
     mm->exefile = NULL;
     mm->refcount = 1;
