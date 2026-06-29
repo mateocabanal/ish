@@ -95,6 +95,12 @@ struct cpu_state {
         dword_t eip;  // For i386 compatibility
     };
 
+    // 64-bit flags register (x86-64)
+    union {
+        qword_t rflags;
+        dword_t eflags_compat;  // Lower 32 bits for compatibility
+    };
+
     // flags
     union {
         dword_t eflags;
@@ -186,6 +192,10 @@ struct cpu_state {
     // TLS bullshit
     word_t gs;
     addr_t tls_ptr;
+    
+    // x86-64 FS/GS base registers for TLS
+    qword_t fs_base;
+    qword_t gs_base;
 
     // for the page fault handler
     addr_t segfault_addr;
