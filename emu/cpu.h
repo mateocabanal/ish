@@ -266,4 +266,36 @@ static inline const char *reg32_name(enum reg32 reg) {
     }
 }
 
+// x86-64 register enum (includes r8-r15)
+enum reg64 {
+    reg_rax = 0, reg_rcx, reg_rdx, reg_rbx, reg_rsp, reg_rbp, reg_rsi, reg_rdi,
+    reg_r8, reg_r9, reg_r10, reg_r11, reg_r12, reg_r13, reg_r14, reg_r15,
+    reg64_count,
+    reg64_none = reg64_count,
+    reg64_rip = 16,  // Special value for RIP-relative addressing
+};
+
+static inline const char *reg64_name(enum reg64 reg) {
+    switch (reg) {
+        case reg_rax: return "rax";
+        case reg_rcx: return "rcx";
+        case reg_rdx: return "rdx";
+        case reg_rbx: return "rbx";
+        case reg_rsp: return "rsp";
+        case reg_rbp: return "rbp";
+        case reg_rsi: return "rsi";
+        case reg_rdi: return "rdi";
+        case reg_r8: return "r8";
+        case reg_r9: return "r9";
+        case reg_r10: return "r10";
+        case reg_r11: return "r11";
+        case reg_r12: return "r12";
+        case reg_r13: return "r13";
+        case reg_r14: return "r14";
+        case reg_r15: return "r15";
+        case reg64_rip: return "rip";
+        default: return "?";
+    }
+}
+
 #endif
